@@ -8,6 +8,10 @@ import sys
 import threading
 import time
 import webview
+
+import clr
+from System import Action
+
 from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
 
 
@@ -19,7 +23,7 @@ PROFILE_DIR = os.path.join(
     "YMusicMini",
     "WebView2Profile",
 )
-WINDOW_WIDTH = 500
+WINDOW_WIDTH = 540
 WINDOW_HEIGHT = 180
 
 HWND_TOPMOST = -1
@@ -54,6 +58,8 @@ SNAP_PX = 16
 _PLAY_PAUSE_BUTTON_LABELS = ["Воспроизведение", "Пауза"]
 _PREVIOUS_BUTTON_LABELS = ["Предыдущая песня", "Предыдущая композиция"]
 _NEXT_BUTTON_LABELS = ["Следующая песня", "Следующая композиция"]
+_LIKE_BUTTON_LABELS = ["Нравится"]
+_DISLIKE_BUTTON_LABELS = ["Не нравится"]
 
 
 class _KEYBDINPUT(ctypes.Structure):
@@ -140,17 +146,22 @@ main{display:flex;align-items:center;gap:9px;padding:8px 10px}.cover{width:50px;
 .vol input[type=range]{flex:1;height:4px;-webkit-appearance:none;appearance:none;background:#555;border-radius:2px;outline:none;cursor:pointer}
 .vol input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#ffd21f;cursor:pointer}
 .vol-lbl{font-size:11px;color:#aaa;min-width:28px;text-align:center}
+.like{position:relative;background:none;font-size:19px;min-width:30px;height:30px;color:#8a8a8a;padding:0 3px}
+.like.on{color:#ff4d4d}
+button.like:hover{background:none;color:#fff}
+.like.strike::after{content:'';position:absolute;left:3px;right:3px;top:50%;height:2px;background:currentColor;transform:rotate(-38deg);border-radius:1px}
 </style></head><body><header id="drag"><div class="title">YMusic Mini</div><button class="pin" id="pin">Закрепить</button><button id="min">−</button><button class="close" id="close">×</button></header>
- <main><div class="cover"><span id="coverMark">♪</span><img id="coverImage" alt=""></div><div class="meta"><div class="track" id="track">Откройте «Мою волну»</div><div class="artist" id="artist">Пульт Яндекс.Музыки</div></div><div class="controls"><button id="show">Открыть</button><button id="prev">◀</button><button class="play" id="toggle">▶</button><button id="next">▶|</button></div></main>
+ <main><div class="cover"><span id="coverMark">♪</span><img id="coverImage" alt=""></div><div class="meta"><div class="track" id="track">Откройте «Мою волну»</div><div class="artist" id="artist">Пульт Яндекс.Музыки</div></div><div class="controls"><button id="show">Открыть</button><button class="like" id="like">♡</button><button class="like strike" id="dislike">♡</button><button id="prev">◀</button><button class="play" id="toggle">▶</button><button id="next">▶|</button></div></main>
 <div class="vol"><span class="vol-lbl" id="volIcon">🔊</span><input type="range" id="volSlider" min="0" max="100" value="100"><span class="vol-lbl" id="volValue">100</span></div>
 <script>
 const api=()=>window.pywebview&&window.pywebview.api;
 function updateTrack(s){document.getElementById('track').textContent=s.title||'Откройте «Мою волну»';document.getElementById('artist').textContent=s.artist||'Пульт Яндекс.Музыки';document.getElementById('toggle').textContent=s.playing?'Ⅱ':'▶';var image=document.getElementById('coverImage');image.style.display=s.cover?'block':'none';document.getElementById('coverMark').style.display=s.cover?'none':'block';if(s.cover)image.src=s.cover;}
 function updateVolume(v){document.getElementById('volSlider').value=v;document.getElementById('volValue').textContent=v;document.getElementById('volIcon').textContent=v==0?'🔇':v<33?'🔈':v<66?'🔉':'🔊';}
+function updateLikeState(s){if(!s)return;var l=document.getElementById('like'),d=document.getElementById('dislike');if(s.liked===true||s.liked===false){l.textContent=s.liked?'♥':'♡';l.classList.toggle('on',s.liked);}if(s.disliked===true||s.disliked===false){d.classList.toggle('on',s.disliked);}}
 document.getElementById('pin').onclick=()=>{const b=document.getElementById('pin'),on=!b.classList.contains('active');if(api())api().set_always_on_top(on).then(ok=>{b.classList.toggle('active',!!ok);b.textContent=ok?'Закреплено':'Закрепить'})};
 document.getElementById('min').onclick=()=>api()&&api().minimize();document.getElementById('close').onclick=()=>api()&&api().close();
 document.getElementById('show').onclick=()=>api()&&api().show_music();
-document.getElementById('prev').onclick=()=>api()&&api().previous();document.getElementById('next').onclick=()=>api()&&api().next();document.getElementById('toggle').onclick=()=>api()&&api().toggle();
+document.getElementById('prev').onclick=()=>api()&&api().previous();document.getElementById('next').onclick=()=>api()&&api().next();document.getElementById('toggle').onclick=()=>api()&&api().toggle();document.getElementById('like').onclick=()=>{if(api())api().toggle_like().then(s=>{if(s)updateLikeState(s)})};document.getElementById('dislike').onclick=()=>{if(api())api().dislike().then(s=>{if(s)updateLikeState(s)})};
 document.getElementById('volSlider').oninput=function(){var v=this.value;document.getElementById('volValue').textContent=v;document.getElementById('volIcon').textContent=v==0?'🔇':v<33?'🔈':v<66?'🔉':'🔊';if(api())api().set_volume(v/100);};
 if(api())api().get_volume().then(function(r){if(r&&r.volume!=null)updateVolume(r.volume);});
 document.getElementById('drag').addEventListener('mousedown',e=>{if(e.target.closest('button, input')||!api())return;const x=e.screenX,y=e.screenY;api().begin_drag();const move=m=>api().move_window(m.screenX-x,m.screenY-y);const up=()=>{removeEventListener('mousemove',move);removeEventListener('mouseup',up)};addEventListener('mousemove',move);addEventListener('mouseup',up)});
@@ -171,6 +182,19 @@ PLAYBACK_STATE_SCRIPT = """(function(){
   var playing=null;
   if(session) playing=session.playbackState==='playing';
   return JSON.stringify({playing:playing,mediaSessionState:session?session.playbackState:null});
+})()"""
+
+LIKE_STATE_SCRIPT = """(function(){
+  var bar=document.querySelector('section[class*="PlayerBar_root"]')||document;
+  var liked=null,disliked=null;
+  var btns=bar.querySelectorAll('button');
+  for(var i=0;i<btns.length;i++){
+    var label=btns[i].getAttribute('aria-label')||'';
+    var pressed=btns[i].getAttribute('aria-pressed');
+    if(label==='Нравится') liked=pressed==='true';
+    if(label==='Не нравится') disliked=pressed==='true';
+  }
+  return JSON.stringify({liked:liked,disliked:disliked});
 })()"""
 
 BUTTON_CENTER_SCRIPT = """(function(){
@@ -379,6 +403,18 @@ def _music_track(window):
         return None
 
 
+def _like_state(window):
+    try:
+        state = _decode_js_json(window.evaluate_js(LIKE_STATE_SCRIPT))
+        liked = state.get("liked")
+        disliked = state.get("disliked")
+        if liked is None and disliked is None:
+            return None
+        return {"liked": liked, "disliked": disliked}
+    except Exception:
+        return None
+
+
 def _update_remote(remote, music):
     try:
         state = _decode_js_json(music.evaluate_js(MUSIC_STATE_SCRIPT))
@@ -387,9 +423,19 @@ def _update_remote(remote, music):
         pass
 
 
+def _update_like_remote(remote, music):
+    try:
+        state = _like_state(music)
+        if state:
+            remote.evaluate_js("updateLikeState(%s);" % json.dumps(state))
+    except Exception:
+        pass
+
+
 def _poll_music_state(remote, music, stop_event):
     while not stop_event.is_set():
         _update_remote(remote, music)
+        _update_like_remote(remote, music)
         stop_event.wait(0.7)
 
 
@@ -549,6 +595,16 @@ class RemoteApi:
         after = _music_track(self._music)
         return bool(before is not None and after is not None and after != before)
 
+    def toggle_like(self):
+        _real_click(self._music, _LIKE_BUTTON_LABELS)
+        time.sleep(0.7)
+        return _like_state(self._music)
+
+    def dislike(self):
+        _real_click(self._music, _DISLIKE_BUTTON_LABELS)
+        time.sleep(0.7)
+        return _like_state(self._music)
+
 
 def main():
     music = webview.create_window(MUSIC_TITLE, MUSIC_URL, width=900, height=650, resizable=True)
@@ -571,7 +627,24 @@ def main():
         music.hide()
         return False
 
+    def lock_music_window():
+        native = music.native
+        if native is None:
+            return
+        try:
+            native.Invoke(Action(lambda: setattr(native, "MinimizeBox", False)))
+        except Exception:
+            pass
+
+    def collapse_music():
+        if api._allow_music_close:
+            return
+        music.hide()
+        music.restore()
+
     music.events.closing += hide_music
+    music.events.shown += lock_music_window
+    music.events.minimized += collapse_music
     threading.Thread(
         target=_poll_music_state,
         args=(remote, music, api._stop_event),
