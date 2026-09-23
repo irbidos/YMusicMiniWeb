@@ -136,12 +136,12 @@ if _user32:
 REMOTE_HTML = """<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><style>
 *{box-sizing:border-box}html,body{height:100%;margin:0;background:#181818;color:#fff;font:13px Segoe UI,Arial;overflow:hidden}
-body{display:grid;grid-template-rows:40px 1fr 36px;border:1px solid #444;border-radius:10px}
+body{display:grid;grid-template-rows:40px 1fr 36px;grid-template-columns:minmax(0,1fr);border:1px solid #444;border-radius:10px}
 header{display:flex;align-items:center;gap:7px;padding:0 9px;background:#202020;user-select:none}
 .title{flex:1;font-weight:600;font-size:15px}button{border:0;border-radius:16px;background:#383838;color:#fff;cursor:pointer;height:30px;min-width:32px;font:inherit}button:hover{background:#555}
 .pin{padding:0 10px;font-size:11px}.pin.active{background:#ffd21f;color:#222}.close:hover{background:#b83232}
-main{display:flex;align-items:center;gap:9px;padding:8px 10px}.cover{width:50px;height:50px;border-radius:8px;background:#333;display:grid;place-items:center;color:#ffd21f;font-size:22px}
- .meta{min-width:0;flex:1}.track,.artist{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.track{font-weight:600}.artist{margin-top:4px;color:#aaa;font-size:12px}.controls{display:flex;gap:6px}.play{background:#ffd21f;color:#222}.empty{color:#999;font-size:11px}.cover img{width:100%;height:100%;object-fit:cover;border-radius:8px;display:none}
+main{display:flex;align-items:center;gap:9px;padding:8px 10px;min-width:0;overflow:hidden}.cover{width:50px;height:50px;border-radius:8px;background:#333;display:grid;place-items:center;color:#ffd21f;font-size:22px}
+ .meta{min-width:0;flex:1;overflow:hidden}.track,.artist{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.track{font-weight:600}.artist{margin-top:4px;color:#aaa;font-size:12px}.controls{display:flex;gap:6px;flex-shrink:0}.play{background:#ffd21f;color:#222}.empty{color:#999;font-size:11px}.cover img{width:100%;height:100%;object-fit:cover;border-radius:8px;display:none}
 .vol{display:flex;align-items:center;gap:6px;padding:0 10px;border-top:1px solid #333;background:#1a1a1a}
 .vol input[type=range]{flex:1;height:4px;-webkit-appearance:none;appearance:none;background:#555;border-radius:2px;outline:none;cursor:pointer}
 .vol input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#ffd21f;cursor:pointer}
@@ -158,7 +158,7 @@ const api=()=>window.pywebview&&window.pywebview.api;
 function updateTrack(s){document.getElementById('track').textContent=s.title||'Откройте «Мою волну»';document.getElementById('artist').textContent=s.artist||'Пульт Яндекс.Музыки';document.getElementById('toggle').textContent=s.playing?'Ⅱ':'▶';var image=document.getElementById('coverImage');image.style.display=s.cover?'block':'none';document.getElementById('coverMark').style.display=s.cover?'none':'block';if(s.cover)image.src=s.cover;}
 function updateVolume(v){document.getElementById('volSlider').value=v;document.getElementById('volValue').textContent=v;document.getElementById('volIcon').textContent=v==0?'🔇':v<33?'🔈':v<66?'🔉':'🔊';}
 function updateLikeState(s){if(!s)return;var l=document.getElementById('like'),d=document.getElementById('dislike');if(s.liked===true||s.liked===false){l.textContent=s.liked?'♥':'♡';l.classList.toggle('on',s.liked);}if(s.disliked===true||s.disliked===false){d.classList.toggle('on',s.disliked);}}
-document.getElementById('pin').onclick=()=>{const b=document.getElementById('pin'),on=!b.classList.contains('active');if(api())api().set_always_on_top(on).then(ok=>{b.classList.toggle('active',!!ok);b.textContent=ok?'Закреплено':'Закрепить'})};
+document.getElementById('pin').onclick=()=>{const b=document.getElementById('pin'),on=!b.classList.contains('active');if(api())api().set_always_on_top(on).then(ok=>{if(ok){b.classList.toggle('active',on);b.textContent=on?'Закреплено':'Закрепить';}});};
 document.getElementById('min').onclick=()=>api()&&api().minimize();document.getElementById('close').onclick=()=>api()&&api().close();
 document.getElementById('show').onclick=()=>api()&&api().show_music();
 document.getElementById('prev').onclick=()=>api()&&api().previous();document.getElementById('next').onclick=()=>api()&&api().next();document.getElementById('toggle').onclick=()=>api()&&api().toggle();document.getElementById('like').onclick=()=>{if(api())api().toggle_like().then(s=>{if(s)updateLikeState(s)})};document.getElementById('dislike').onclick=()=>{if(api())api().dislike().then(s=>{if(s)updateLikeState(s)})};
