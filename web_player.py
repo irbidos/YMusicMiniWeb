@@ -131,6 +131,13 @@ if _user32:
     _user32.MonitorFromWindow.restype = ctypes.c_void_p
     _user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)]
     _user32.GetMonitorInfoW.restype = ctypes.wintypes.BOOL
+    _user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+    _user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+    _user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+    _user32.SendInput.argtypes = [ctypes.wintypes.UINT, ctypes.c_void_p, ctypes.c_int]
+    _user32.SendInput.restype = ctypes.wintypes.UINT
+    _user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+    _user32.FindWindowW.restype = ctypes.wintypes.HWND
 
 
 REMOTE_HTML = """<!doctype html>
@@ -199,17 +206,22 @@ LIKE_STATE_SCRIPT = """(function(){
 
 BUTTON_CENTER_SCRIPT = """(function(){
   var labels=%s;
-  var bar=document.querySelector('section[class*="PlayerBar_root"]')||document;
+  var bar=document.querySelector('section[class*="PlayerBar_root"]');
+  if(!bar) return 'null';
   var btns=bar.querySelectorAll('button');
   for(var i=0;i<btns.length;i++){
     var label=btns[i].getAttribute('aria-label')||'';
     if(labels.indexOf(label)>=0){
-      var r=btns[i].getBoundingClientRect();
-      return JSON.stringify({
-        x:Math.round(r.x+r.width/2),
-        y:Math.round(r.y+r.height/2),
-        label:label
-      });
+      var b=btns[i], r=b.getBoundingClientRect();
+      var x=r.x+r.width/2, y=r.y+r.height/2;
+      var base={bubbles:true,cancelable:true,composed:true,view:window,
+                clientX:x,clientY:y,button:0};
+      try{b.dispatchEvent(new PointerEvent('pointerdown',Object.assign({},base,{buttons:1,pointerId:1,pointerType:'mouse',isPrimary:true})));}catch(e){}
+      b.dispatchEvent(new MouseEvent('mousedown',Object.assign({},base,{buttons:1,detail:1})));
+      try{b.dispatchEvent(new PointerEvent('pointerup',Object.assign({},base,{buttons:0,pointerId:1,pointerType:'mouse',isPrimary:true})));}catch(e){}
+      b.dispatchEvent(new MouseEvent('mouseup',Object.assign({},base,{buttons:0,detail:1})));
+      b.dispatchEvent(new MouseEvent('click',Object.assign({},base,{buttons:0,detail:1})));
+      return JSON.stringify({clicked:true,label:label});
     }
   }
   return 'null';
@@ -329,33 +341,21 @@ def _work_area(hwnd):
     return info.rcWork
 
 
-def _lparam(x, y):
-    return (int(y) << 16) | (int(x) & 0xFFFF)
-
-
 def _real_click(window, labels):
-    """Send a real Win32 mouse click to the page at the button center."""
+    """Dispatch a full pointer/mouse event sequence on the target page button.
+
+    Runs entirely inside the page, so it never moves the system cursor and
+    never depends on the music window being visible or focused.
+    """
     raw = window.evaluate_js(BUTTON_CENTER_SCRIPT % repr(labels))
-    parsed = _decode_js_json(raw)
-    x, y = parsed.get("x"), parsed.get("y")
-    if x is None or y is None:
-        return False
-    render = _find_render_hwnd(window)
-    if not render:
-        return False
-    xy = _lparam(x, y)
-    _user32.PostMessageW(render, WM_MOUSEMOVE, 0, xy)
-    _user32.PostMessageW(render, WM_LBUTTONDOWN, MK_LBUTTON, xy)
-    time.sleep(0.03)
-    _user32.PostMessageW(render, WM_LBUTTONUP, 0, xy)
-    return True
+    return bool(_decode_js_json(raw).get("clicked"))
 
 
 def _send_appcommand(window, command):
     hwnd = _find_chrome_window(window)
     if not hwnd:
         return False
-    _user32.SendMessageW(hwnd, WM_APPCOMMAND, command << 16, 0)
+    _user32.SendMessageW(hwnd, WM_APPCOMMAND, 0, command << 16)
     return True
 
 
@@ -369,13 +369,15 @@ def _send_key(vk):
 
 
 def _focus_and_key(window, vk):
-    """Last-resort: focus the music window and press a real key, then hide back."""
+    """Last resort: focus the (hidden) music window and press a real key.
+
+    Never unhides the window, so the mini remote can never pop the music
+    window into view.
+    """
     try:
         hwnd = _handle(window)
         if not hwnd:
             return False
-        _user32.ShowWindow(hwnd, SW_RESTORE)
-        _user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
         _user32.SetForegroundWindow(hwnd)
         time.sleep(0.1)
         _send_key(vk)
@@ -542,7 +544,6 @@ class RemoteApi:
 
     def toggle(self):
         before = _playback_verdict(self._music)
-        was_visible = _is_visible(self._music)
 
         _real_click(self._music, _PLAY_PAUSE_BUTTON_LABELS)
         time.sleep(0.6)
@@ -563,11 +564,6 @@ class RemoteApi:
             time.sleep(0.5)
             final = _playback_verdict(self._music)
             changed = _state_changed(before, final)
-            if not was_visible:
-                try:
-                    self._music.hide()
-                except Exception:
-                    pass
 
         return bool(changed)
 
