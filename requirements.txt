@@ -1,2 +1,4 @@
-pywebview>=5,<6
-pycaw
+pywebview==5.4
+pycaw==20240210
+pythonnet==3.2.1
+pyinstaller==6.16.0

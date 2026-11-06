@@ -12,7 +12,9 @@ import webview
 import clr
 from System import Action
 
-from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+from pycaw.pycaw import AudioUtilities, IAudioSessionControl2, ISimpleAudioVolume
+
+from audio_sessions import find_matching_audio_session
 
 
 APP_TITLE = "YMusic Mini"
@@ -98,11 +100,28 @@ class _MONITORINFO(ctypes.Structure):
     ]
 
 
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", ctypes.wintypes.DWORD),
+        ("cntUsage", ctypes.wintypes.DWORD),
+        ("th32ProcessID", ctypes.wintypes.DWORD),
+        # Win32 ULONG_PTR: a scalar whose width follows the process ABI.
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", ctypes.wintypes.DWORD),
+        ("cntThreads", ctypes.wintypes.DWORD),
+        ("th32ParentProcessID", ctypes.wintypes.DWORD),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", ctypes.wintypes.DWORD),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
 _EnumChildProc = ctypes.WINFUNCTYPE(
     ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
 )
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True) if sys.platform == "win32" else None
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True) if sys.platform == "win32" else None
 if _user32:
     _user32.SetWindowPos.argtypes = [
         ctypes.wintypes.HWND, ctypes.wintypes.HWND,
@@ -138,6 +157,20 @@ if _user32:
     _user32.SendInput.restype = ctypes.wintypes.UINT
     _user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
     _user32.FindWindowW.restype = ctypes.wintypes.HWND
+    _user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)]
+    _user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+if _kernel32:
+    _kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.DWORD]
+    _kernel32.CreateToolhelp32Snapshot.restype = ctypes.wintypes.HANDLE
+    _kernel32.Process32FirstW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+    _kernel32.Process32FirstW.restype = ctypes.wintypes.BOOL
+    _kernel32.Process32NextW.argtypes = [ctypes.wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+    _kernel32.Process32NextW.restype = ctypes.wintypes.BOOL
+    _kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+    _kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+
+TH32CS_SNAPPROCESS = 0x00000002
+INVALID_HANDLE_VALUE = ctypes.wintypes.HANDLE(-1).value
 
 
 REMOTE_HTML = """<!doctype html>
@@ -235,6 +268,66 @@ def _handle(window):
         return window.native.Handle.ToInt64()
     except Exception:
         return _user32.FindWindowW(None, APP_TITLE)
+
+
+def _window_process_id(window):
+    if sys.platform != "win32":
+        return None
+    hwnd = _handle(window)
+    if not hwnd:
+        return None
+    pid = ctypes.wintypes.DWORD()
+    if not _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid)):
+        return None
+    return int(pid.value)
+
+
+def _music_process_ids(window):
+    """Return the music window PID and all descendant WebView2 process PIDs."""
+    root_pid = _window_process_id(window)
+    if not root_pid:
+        return set()
+
+    if not _kernel32:
+        return {root_pid}
+    entries = []
+    snapshot = _kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == INVALID_HANDLE_VALUE:
+        return {root_pid}
+    try:
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+        if _kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            while True:
+                entries.append((int(entry.th32ProcessID), int(entry.th32ParentProcessID)))
+                if not _kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                    break
+    finally:
+        _kernel32.CloseHandle(snapshot)
+
+    pids = {root_pid}
+    changed = True
+    while changed:
+        changed = False
+        for pid, parent_pid in entries:
+            if parent_pid in pids and pid not in pids:
+                pids.add(pid)
+                changed = True
+    return pids
+
+
+def _audio_session(window):
+    try:
+        sessions = AudioUtilities.GetAllSessions()
+        process_ids = _music_process_ids(window)
+        session = find_matching_audio_session(sessions, process_ids)
+        if session is None:
+            return None
+        # Verify that the session exposes a process-backed Core Audio control.
+        session._ctl.QueryInterface(IAudioSessionControl2)
+        return session
+    except Exception:
+        return None
 
 
 def _decode_js_json(value):
@@ -517,12 +610,10 @@ class RemoteApi:
 
     def get_volume(self):
         try:
-            sessions = AudioUtilities.GetAllSessions()
-            for s in sessions:
-                proc = s.Process
-                if proc and "msedgewebview2" in proc.name().lower():
-                    vol = s._ctl.QueryInterface(ISimpleAudioVolume)
-                    return {"volume": int(vol.GetMasterVolume() * 100), "muted": bool(vol.GetMute()), "found": True}
+            session = _audio_session(self._music)
+            if session is not None:
+                vol = session._ctl.QueryInterface(ISimpleAudioVolume)
+                return {"volume": int(vol.GetMasterVolume() * 100), "muted": bool(vol.GetMute()), "found": True}
         except Exception:
             pass
         return {"volume": 100, "muted": False, "found": False}
@@ -530,14 +621,12 @@ class RemoteApi:
     def set_volume(self, level):
         level = max(0.0, min(1.0, float(level)))
         try:
-            sessions = AudioUtilities.GetAllSessions()
-            for s in sessions:
-                proc = s.Process
-                if proc and "msedgewebview2" in proc.name().lower():
-                    vol = s._ctl.QueryInterface(ISimpleAudioVolume)
-                    vol.SetMasterVolume(level, None)
-                    vol.SetMute(False, None)
-                    return True
+            session = _audio_session(self._music)
+            if session is not None:
+                vol = session._ctl.QueryInterface(ISimpleAudioVolume)
+                vol.SetMasterVolume(level, None)
+                vol.SetMute(False, None)
+                return True
         except Exception:
             pass
         return False

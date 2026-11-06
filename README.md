@@ -36,8 +36,8 @@
 ### Из исходников
 
 ```bash
-git clone https://github.com/frizzy/yandex-music-mini.git
-cd yandex-music-mini
+git clone https://github.com/irbidos/YMusicMiniWeb.git
+cd YMusicMiniWeb
 
 python -m venv venv
 venv\Scripts\activate          # Windows
@@ -51,7 +51,6 @@ python run_yandex_web.py
 ## 📦 Сборка
 
 ```bash
-pip install pyinstaller
 pyinstaller YMusicMiniWeb.spec
 ```
 
@@ -86,3 +85,7 @@ pyinstaller YMusicMiniWeb.spec
 ## 📄 Лицензия
 
 Смотрите файл [LICENSE](LICENSE). Проект неофициальный и не связан с Яндексом.
+
+Текущая copyright-атрибуция сохранена как в исходном snapshot проекта. Доступные
+Git-метаданные не позволяют достоверно установить полную историю авторства, поэтому
+не следует удалять или заменять эту атрибуцию без подтверждения правообладателя.
