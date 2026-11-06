@@ -15,6 +15,7 @@ from System import Action
 from pycaw.pycaw import AudioUtilities, IAudioSessionControl2, ISimpleAudioVolume
 
 from audio_sessions import find_matching_audio_session
+from media_progress import format_duration
 
 
 APP_TITLE = "YMusic Mini"
@@ -26,7 +27,7 @@ PROFILE_DIR = os.path.join(
     "WebView2Profile",
 )
 WINDOW_WIDTH = 540
-WINDOW_HEIGHT = 180
+WINDOW_HEIGHT = 214
 
 HWND_TOPMOST = -1
 HWND_NOTOPMOST = -2
@@ -176,7 +177,7 @@ INVALID_HANDLE_VALUE = ctypes.wintypes.HANDLE(-1).value
 REMOTE_HTML = """<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><style>
 *{box-sizing:border-box}html,body{height:100%;margin:0;background:#181818;color:#fff;font:13px Segoe UI,Arial;overflow:hidden}
-body{display:grid;grid-template-rows:40px 1fr 36px;grid-template-columns:minmax(0,1fr);border:1px solid #444;border-radius:10px}
+body{display:grid;grid-template-rows:40px 1fr 36px 34px;grid-template-columns:minmax(0,1fr);border:1px solid #444;border-radius:10px}
 header{display:flex;align-items:center;gap:7px;padding:0 9px;background:#202020;user-select:none}
 .title{flex:1;font-weight:600;font-size:15px}button{border:0;border-radius:16px;background:#383838;color:#fff;cursor:pointer;height:30px;min-width:32px;font:inherit}button:hover{background:#555}
 .pin{padding:0 10px;font-size:11px}.pin.active{background:#ffd21f;color:#222}.close:hover{background:#b83232}
@@ -184,19 +185,26 @@ main{display:flex;align-items:center;gap:9px;padding:8px 10px;min-width:0;overfl
  .meta{min-width:0;flex:1;overflow:hidden}.track,.artist{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.track{font-weight:600}.artist{margin-top:4px;color:#aaa;font-size:12px}.controls{display:flex;gap:6px;flex-shrink:0}.play{background:#ffd21f;color:#222}.empty{color:#999;font-size:11px}.cover img{width:100%;height:100%;object-fit:cover;border-radius:8px;display:none}
 .vol{display:flex;align-items:center;gap:6px;padding:0 10px;border-top:1px solid #333;background:#1a1a1a}
 .vol input[type=range]{flex:1;height:4px;-webkit-appearance:none;appearance:none;background:#555;border-radius:2px;outline:none;cursor:pointer}
-.vol input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#ffd21f;cursor:pointer}
-.vol-lbl{font-size:11px;color:#aaa;min-width:28px;text-align:center}
+ .vol input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#ffd21f;cursor:pointer}
+ .vol-lbl{font-size:11px;color:#aaa;min-width:28px;text-align:center}
+ .progress{display:flex;align-items:center;gap:6px;padding:0 10px;border-top:1px solid #333;background:#1a1a1a}
+ .progress input[type=range]{flex:1;height:4px;-webkit-appearance:none;appearance:none;background:#555;border-radius:2px;outline:none;cursor:pointer}
+ .progress input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#ffd21f;cursor:pointer}
+ .time{font-size:11px;color:#aaa;min-width:34px;text-align:center}
 .like{position:relative;background:none;font-size:19px;min-width:30px;height:30px;color:#8a8a8a;padding:0 3px}
 .like.on{color:#ff4d4d}
 button.like:hover{background:none;color:#fff}
 .like.strike::after{content:'';position:absolute;left:3px;right:3px;top:50%;height:2px;background:currentColor;transform:rotate(-38deg);border-radius:1px}
 </style></head><body><header id="drag"><div class="title">YMusic Mini</div><button class="pin" id="pin">Закрепить</button><button id="min">−</button><button class="close" id="close">×</button></header>
  <main><div class="cover"><span id="coverMark">♪</span><img id="coverImage" alt=""></div><div class="meta"><div class="track" id="track">Откройте «Мою волну»</div><div class="artist" id="artist">Пульт Яндекс.Музыки</div></div><div class="controls"><button id="show">Открыть</button><button class="like" id="like">♡</button><button class="like strike" id="dislike">♡</button><button id="prev">◀</button><button class="play" id="toggle">▶</button><button id="next">▶|</button></div></main>
-<div class="vol"><span class="vol-lbl" id="volIcon">🔊</span><input type="range" id="volSlider" min="0" max="100" value="100"><span class="vol-lbl" id="volValue">100</span></div>
+ <div class="vol"><span class="vol-lbl" id="volIcon">🔊</span><input type="range" id="volSlider" min="0" max="100" value="100"><span class="vol-lbl" id="volValue">100</span></div>
+ <div class="progress"><span class="time" id="elapsed">0:00</span><input type="range" id="progressSlider" min="0" max="1000" value="0"><span class="time" id="duration">0:00</span></div>
 <script>
-const api=()=>window.pywebview&&window.pywebview.api;
+ const api=()=>window.pywebview&&window.pywebview.api;
+ var progressDragging=false;
 function updateTrack(s){document.getElementById('track').textContent=s.title||'Откройте «Мою волну»';document.getElementById('artist').textContent=s.artist||'Пульт Яндекс.Музыки';document.getElementById('toggle').textContent=s.playing?'Ⅱ':'▶';var image=document.getElementById('coverImage');image.style.display=s.cover?'block':'none';document.getElementById('coverMark').style.display=s.cover?'none':'block';if(s.cover)image.src=s.cover;}
 function updateVolume(v){document.getElementById('volSlider').value=v;document.getElementById('volValue').textContent=v;document.getElementById('volIcon').textContent=v==0?'🔇':v<33?'🔈':v<66?'🔉':'🔊';}
+ function updateProgress(s){var duration=Number(s&&s.duration)||0,current=Math.max(0,Number(s&&s.current)||0);var slider=document.getElementById('progressSlider');slider.disabled=duration<=0;if(!progressDragging)slider.value=duration?Math.min(1000,Math.max(0,current/duration*1000)):0;document.getElementById('elapsed').textContent=s&&s.elapsed||'0:00';document.getElementById('duration').textContent=s&&s.total||'0:00';}
 function updateLikeState(s){if(!s)return;var l=document.getElementById('like'),d=document.getElementById('dislike');if(s.liked===true||s.liked===false){l.textContent=s.liked?'♥':'♡';l.classList.toggle('on',s.liked);}if(s.disliked===true||s.disliked===false){d.classList.toggle('on',s.disliked);}}
 document.getElementById('pin').onclick=()=>{const b=document.getElementById('pin'),on=!b.classList.contains('active');if(api())api().set_always_on_top(on).then(ok=>{if(ok){b.classList.toggle('active',on);b.textContent=on?'Закреплено':'Закрепить';}});};
 document.getElementById('min').onclick=()=>api()&&api().minimize();document.getElementById('close').onclick=()=>api()&&api().close();
@@ -204,6 +212,10 @@ document.getElementById('show').onclick=()=>api()&&api().show_music();
 document.getElementById('prev').onclick=()=>api()&&api().previous();document.getElementById('next').onclick=()=>api()&&api().next();document.getElementById('toggle').onclick=()=>api()&&api().toggle();document.getElementById('like').onclick=()=>{if(api())api().toggle_like().then(s=>{if(s)updateLikeState(s)})};document.getElementById('dislike').onclick=()=>{if(api())api().dislike().then(s=>{if(s)updateLikeState(s)})};
 document.getElementById('volSlider').oninput=function(){var v=this.value;document.getElementById('volValue').textContent=v;document.getElementById('volIcon').textContent=v==0?'🔇':v<33?'🔈':v<66?'🔉':'🔊';if(api())api().set_volume(v/100);};
 if(api())api().get_volume().then(function(r){if(r&&r.volume!=null)updateVolume(r.volume);});
+ if(api())api().get_progress().then(updateProgress);
+ document.getElementById('progressSlider').onpointerdown=function(){progressDragging=true;};
+ document.getElementById('progressSlider').oninput=function(){if(api())api().seek_progress(this.value/1000);};
+ document.getElementById('progressSlider').onpointerup=function(){progressDragging=false;};
 document.getElementById('drag').addEventListener('mousedown',e=>{if(e.target.closest('button, input')||!api())return;const x=e.screenX,y=e.screenY;api().begin_drag();const move=m=>api().move_window(m.screenX-x,m.screenY-y);const up=()=>{removeEventListener('mousemove',move);removeEventListener('mouseup',up)};addEventListener('mousemove',move);addEventListener('mouseup',up)});
 </script></body></html>"""
 
@@ -222,6 +234,14 @@ PLAYBACK_STATE_SCRIPT = """(function(){
   var playing=null;
   if(session) playing=session.playbackState==='playing';
   return JSON.stringify({playing:playing,mediaSessionState:session?session.playbackState:null});
+})()"""
+
+PROGRESS_SCRIPT = """(function(){
+  var media=document.querySelector('audio,video');
+  if(!media || !Number.isFinite(media.duration) || media.duration<=0)
+    return JSON.stringify({current:0,duration:0,elapsed:'0:00',total:'0:00'});
+  return JSON.stringify({current:media.currentTime||0,duration:media.duration,
+    elapsed:Math.floor(media.currentTime||0),total:Math.floor(media.duration)});
 })()"""
 
 LIKE_STATE_SCRIPT = """(function(){
@@ -510,6 +530,21 @@ def _like_state(window):
         return None
 
 
+def _progress_state(window):
+    try:
+        state = _decode_js_json(window.evaluate_js(PROGRESS_SCRIPT))
+        current = state.get("current", 0)
+        duration = state.get("duration", 0)
+        return {
+            "current": current,
+            "duration": duration,
+            "elapsed": format_duration(current),
+            "total": format_duration(duration),
+        }
+    except Exception:
+        return {"current": 0, "duration": 0, "elapsed": "0:00", "total": "0:00"}
+
+
 def _update_remote(remote, music):
     try:
         state = _decode_js_json(music.evaluate_js(MUSIC_STATE_SCRIPT))
@@ -527,10 +562,18 @@ def _update_like_remote(remote, music):
         pass
 
 
+def _update_progress_remote(remote, music):
+    try:
+        remote.evaluate_js("updateProgress(%s);" % json.dumps(_progress_state(music)))
+    except Exception:
+        pass
+
+
 def _poll_music_state(remote, music, stop_event):
     while not stop_event.is_set():
         _update_remote(remote, music)
         _update_like_remote(remote, music)
+        _update_progress_remote(remote, music)
         stop_event.wait(0.7)
 
 
@@ -617,6 +660,22 @@ class RemoteApi:
         except Exception:
             pass
         return {"volume": 100, "muted": False, "found": False}
+
+    def get_progress(self):
+        return _progress_state(self._music)
+
+    def seek_progress(self, fraction):
+        try:
+            ratio = min(1.0, max(0.0, float(fraction)))
+            script = """(function(){
+              var media=document.querySelector('audio,video');
+              if(!media || !Number.isFinite(media.duration) || media.duration<=0) return false;
+              media.currentTime=media.duration*%s;
+              return true;
+            })()""" % ratio
+            return bool(self._music.evaluate_js(script))
+        except Exception:
+            return False
 
     def set_volume(self, level):
         level = max(0.0, min(1.0, float(level)))
