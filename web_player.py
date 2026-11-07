@@ -12,9 +12,6 @@ import webview
 import clr
 from System import Action
 
-from pycaw.pycaw import AudioUtilities, IAudioSessionControl2, ISimpleAudioVolume
-
-from audio_sessions import find_matching_audio_session
 from media_progress import format_duration
 
 
@@ -241,6 +238,32 @@ PLAYBACK_STATE_SCRIPT = """(function(){
   return JSON.stringify({playing:playing,mediaSessionState:session?session.playbackState:null});
 })()"""
 
+VOLUME_CONTROL_SELECTOR = 'input[type="range"][aria-label="Управление громкостью"]'
+
+GET_VOLUME_SCRIPT = """(function(){
+  var slider=document.querySelector('%s');
+  if(!slider) return JSON.stringify({found:false,volume:100,muted:false});
+  var min=Number(slider.min)||0, max=Number(slider.max);
+  if(!Number.isFinite(max) || max<=min) return JSON.stringify({found:false,volume:100,muted:false});
+  var value=Math.max(min,Math.min(max,Number(slider.value)||0));
+  return JSON.stringify({found:true,volume:Math.round((value-min)/(max-min)*100),muted:false});
+})()""" % VOLUME_CONTROL_SELECTOR
+
+SET_VOLUME_SCRIPT = """(function(){
+  var slider=document.querySelector('input[type="range"][aria-label="Управление громкостью"]'), level=%s;
+  if(!slider || slider.disabled) return false;
+  var min=Number(slider.min)||0, max=Number(slider.max);
+  if(!Number.isFinite(max) || max<=min) return false;
+  var target=min+(max-min)*level;
+  try{
+    var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+    setter.call(slider,String(target));
+    slider.dispatchEvent(new Event('input',{bubbles:true}));
+    slider.dispatchEvent(new Event('change',{bubbles:true}));
+  }catch(e){return false;}
+  return Math.abs(Number(slider.value)-target)<0.02;
+})()"""
+
 PROGRESS_SCRIPT = """(function(){
   var slider=document.querySelector('input[type="range"][aria-label="Управление таймкодом"]');
   if(!slider || !slider.max || Number(slider.max)<=0)
@@ -308,66 +331,6 @@ def _handle(window):
         return window.native.Handle.ToInt64()
     except Exception:
         return _user32.FindWindowW(None, APP_TITLE)
-
-
-def _window_process_id(window):
-    if sys.platform != "win32":
-        return None
-    hwnd = _handle(window)
-    if not hwnd:
-        return None
-    pid = ctypes.wintypes.DWORD()
-    if not _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid)):
-        return None
-    return int(pid.value)
-
-
-def _music_process_ids(window):
-    """Return the music window PID and all descendant WebView2 process PIDs."""
-    root_pid = _window_process_id(window)
-    if not root_pid:
-        return set()
-
-    if not _kernel32:
-        return {root_pid}
-    entries = []
-    snapshot = _kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-    if snapshot == INVALID_HANDLE_VALUE:
-        return {root_pid}
-    try:
-        entry = _PROCESSENTRY32W()
-        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
-        if _kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
-            while True:
-                entries.append((int(entry.th32ProcessID), int(entry.th32ParentProcessID)))
-                if not _kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
-                    break
-    finally:
-        _kernel32.CloseHandle(snapshot)
-
-    pids = {root_pid}
-    changed = True
-    while changed:
-        changed = False
-        for pid, parent_pid in entries:
-            if parent_pid in pids and pid not in pids:
-                pids.add(pid)
-                changed = True
-    return pids
-
-
-def _audio_session(window):
-    try:
-        sessions = AudioUtilities.GetAllSessions()
-        process_ids = _music_process_ids(window)
-        session = find_matching_audio_session(sessions, process_ids)
-        if session is None:
-            return None
-        # Verify that the session exposes a process-backed Core Audio control.
-        session._ctl.QueryInterface(IAudioSessionControl2)
-        return session
-    except Exception:
-        return None
 
 
 def _decode_js_json(value):
@@ -673,12 +636,9 @@ class RemoteApi:
 
     def get_volume(self):
         try:
-            session = _audio_session(self._music)
-            if session is not None:
-                vol = session._ctl.QueryInterface(ISimpleAudioVolume)
-                return {"volume": int(vol.GetMasterVolume() * 100), "muted": bool(vol.GetMute()), "found": True}
+            return _decode_js_json(self._music.evaluate_js(GET_VOLUME_SCRIPT))
         except Exception:
-            pass
+            return {"volume": 100, "muted": False, "found": False}
         return {"volume": 100, "muted": False, "found": False}
 
     def get_progress(self):
@@ -693,17 +653,12 @@ class RemoteApi:
             return False
 
     def set_volume(self, level):
-        level = max(0.0, min(1.0, float(level)))
         try:
-            session = _audio_session(self._music)
-            if session is not None:
-                vol = session._ctl.QueryInterface(ISimpleAudioVolume)
-                vol.SetMasterVolume(level, None)
-                vol.SetMute(False, None)
-                return True
+            level = max(0.0, min(1.0, float(level)))
+            result = self._music.evaluate_js(SET_VOLUME_SCRIPT % repr(level))
+            return result is True or result == "true"
         except Exception:
-            pass
-        return False
+            return False
 
     def toggle(self):
         before = _playback_verdict(self._music)
