@@ -201,7 +201,7 @@ button.like:hover{background:none;color:#fff}
  <div class="progress"><span class="time" id="elapsed">0:00</span><input type="range" id="progressSlider" min="0" max="1000" value="0"><span class="time" id="duration">0:00</span></div>
 <script>
  const api=()=>window.pywebview&&window.pywebview.api;
- var progressDragging=false,seekValue=0,lastCommittedSeek=-1;
+  var progressDragging=false,lastCommittedSeek=-1;
 function updateTrack(s){document.getElementById('track').textContent=s.title||'Откройте «Мою волну»';document.getElementById('artist').textContent=s.artist||'Пульт Яндекс.Музыки';document.getElementById('toggle').textContent=s.playing?'Ⅱ':'▶';var image=document.getElementById('coverImage');image.style.display=s.cover?'block':'none';document.getElementById('coverMark').style.display=s.cover?'none':'block';if(s.cover)image.src=s.cover;}
 function updateVolume(v){document.getElementById('volSlider').value=v;document.getElementById('volValue').textContent=v;document.getElementById('volIcon').textContent=v==0?'🔇':v<33?'🔈':v<66?'🔉':'🔊';}
  function updateProgress(s){var duration=Number(s&&s.duration)||0,current=Math.max(0,Number(s&&s.current)||0);var slider=document.getElementById('progressSlider');slider.disabled=duration<=0;if(!progressDragging)slider.value=duration?Math.min(1000,Math.max(0,current/duration*1000)):0;document.getElementById('elapsed').textContent=s&&s.elapsed||'0:00';document.getElementById('duration').textContent=s&&s.total||'0:00';}
@@ -216,7 +216,7 @@ if(api())api().get_volume().then(function(r){if(r&&r.volume!=null)updateVolume(r
  function commitSeek(){var value=Number(document.getElementById('progressSlider').value)/1000;if(value===lastCommittedSeek)return;lastCommittedSeek=value;progressDragging=false;if(api())api().seek_progress(value);}
  document.getElementById('progressSlider').onpointerdown=function(){progressDragging=true;};
  document.getElementById('progressSlider').onmousedown=function(){progressDragging=true;};
- document.getElementById('progressSlider').oninput=function(){seekValue=Number(this.value)/1000;};
+  document.getElementById('progressSlider').oninput=function(){};
  document.getElementById('progressSlider').onpointerup=commitSeek;
  document.getElementById('progressSlider').onmouseup=commitSeek;
  document.getElementById('progressSlider').onchange=commitSeek;
@@ -241,36 +241,27 @@ PLAYBACK_STATE_SCRIPT = """(function(){
   return JSON.stringify({playing:playing,mediaSessionState:session?session.playbackState:null});
 })()"""
 
-MEDIA_ELEMENT_SCRIPT = """(function(){
-  var all=Array.prototype.slice.call(document.querySelectorAll('audio,video'));
-  var candidates=all.filter(function(media){return Number.isFinite(media.duration)&&media.duration>0;});
-  if(!candidates.length) return null;
-  candidates.sort(function(a,b){
-    var aPlaying=!a.paused&&!a.ended, bPlaying=!b.paused&&!b.ended;
-    if(aPlaying!==bPlaying) return aPlaying?-1:1;
-    return (b.readyState||0)-(a.readyState||0);
-  });
-  return candidates[0];
+PROGRESS_SCRIPT = """(function(){
+  var slider=document.querySelector('input[type="range"][aria-label="Управление таймкодом"]');
+  if(!slider || !slider.max || Number(slider.max)<=0)
+    return JSON.stringify({current:0,duration:0,elapsed:'0:00',total:'0:00'});
+  var current=Number(slider.value)||0, duration=Number(slider.max)||0;
+  return JSON.stringify({current:current,duration:duration,
+    elapsed:Math.floor(current),total:Math.floor(duration)});
 })()"""
 
-PROGRESS_SCRIPT = """(function(){
-  var media=%s;
-  if(!media)
-    return JSON.stringify({current:0,duration:0,elapsed:'0:00',total:'0:00'});
-  return JSON.stringify({current:media.currentTime||0,duration:media.duration,
-    elapsed:Math.floor(media.currentTime||0),total:Math.floor(media.duration)});
-})()""" % MEDIA_ELEMENT_SCRIPT
-
 SEEK_PROGRESS_SCRIPT = """(function(){
-  var media=%s, ratio=%s;
-  if(!media) return false;
-  var target=media.duration*ratio;
-  if(media.seekable && media.seekable.length){
-    var start=media.seekable.start(0), end=media.seekable.end(media.seekable.length-1);
-    target=Math.max(start,Math.min(end,target));
-  }
-  try{media.currentTime=target;}catch(e){return false;}
-  return Math.abs(media.currentTime-target)<1;
+  var slider=document.querySelector('input[type="range"][aria-label="Управление таймкодом"]');
+  var ratio=%s;
+  if(!slider || !slider.max || Number(slider.max)<=0) return false;
+  var target=Number(slider.max)*ratio;
+  try{
+    var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+    setter.call(slider,String(target));
+    slider.dispatchEvent(new Event('input',{bubbles:true}));
+    slider.dispatchEvent(new Event('change',{bubbles:true}));
+  }catch(e){return false;}
+  return Math.abs(Number(slider.value)-target)<1;
 })()"""
 
 LIKE_STATE_SCRIPT = """(function(){
@@ -696,7 +687,7 @@ class RemoteApi:
     def seek_progress(self, fraction):
         try:
             ratio = min(1.0, max(0.0, float(fraction)))
-            result = self._music.evaluate_js(SEEK_PROGRESS_SCRIPT % (MEDIA_ELEMENT_SCRIPT, repr(ratio)))
+            result = self._music.evaluate_js(SEEK_PROGRESS_SCRIPT % repr(ratio))
             return result is True or result == "true"
         except Exception:
             return False
